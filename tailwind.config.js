@@ -1,6 +1,23 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{js,jsx,ts,tsx}'],
+  content: ['./index.html', './src/**/*.{js,jsx}'],
+  safelist: [
+    // Dynamic text colours
+    'text-bull', 'text-bear', 'text-warn', 'text-ts', 'text-tm', 'text-tp',
+    // Dynamic bg colours
+    'bg-bull', 'bg-bear', 'bg-warn', 'bg-ts',
+    'bg-bull-d', 'bg-bear-d', 'bg-warn-d', 'bg-bg-e', 'bg-bg-s', 'bg-bg-c',
+    // Dynamic borders
+    'border-bull', 'border-bear', 'border-warn', 'border-ts', 'border-bd',
+    // Gradient froms / vias / tos
+    'from-bull-d', 'from-bear-d', 'from-warn-d', 'from-bg-s',
+    'via-bg-c', 'via-bull', 'via-bear', 'via-warn', 'via-ts',
+    'to-bull-d', 'to-bear-d', 'to-warn-d', 'to-bg-s',
+    // before: pseudo-element bg (top bar strips on cards)
+    'before:bg-bull', 'before:bg-bear', 'before:bg-warn', 'before:bg-ts',
+    // Opacity variants used dynamically
+    { pattern: /^(bg|border|text)-(bull|bear|warn)\/(6|8|10|12|15|20|25|30|35|40|50)$/ },
+  ],
   theme: {
     extend: {
       colors: {
@@ -23,7 +40,7 @@ export default {
       },
       fontFamily: {
         display: ['"Bebas Neue"',    'sans-serif'],
-        mono:    ['"IBM Plex Mono"', 'monospace' ],
+        mono:    ['"IBM Plex Mono"', 'monospace'],
         sans:    ['"DM Sans"',       'sans-serif'],
       },
       keyframes: {
