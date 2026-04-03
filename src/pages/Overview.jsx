@@ -95,7 +95,7 @@ export default function Overview({
       {/* Alerts + morning note */}
       <div className="grid grid-cols-2 gap-3.5 mb-3.5">
         <AlertsFeed alerts={alerts} hasData={hasData} />
-        <MorningNote assets={assets} sectors={sectors} cis={cis} hasData={hasData} />
+        <MorningNote assets={assets} sectors={sectors} cis={cis} stocks={stocks} hasData={hasData} />
       </div>
 
       {/* Watchlist */}
