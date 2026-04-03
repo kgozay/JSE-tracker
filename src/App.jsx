@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { SECTOR_ORDER } from './data/stocks.js';
 import { computeCIS }    from './utils/scoring.js';
 import { computeAlerts } from './utils/alerts.js';
@@ -15,6 +15,7 @@ import Overview           from './pages/Overview.jsx';
 import MacroTransmission  from './pages/MacroTransmission.jsx';
 import SectorDrilldown    from './pages/SectorDrilldown.jsx';
 
+/* Derive sector aggregates from live stock data */
 function deriveSectors(stocks) {
   const live = stocks.filter(s => s.isLive && s.changePct != null);
   const sectors = {};
@@ -30,20 +31,23 @@ function deriveSectors(stocks) {
     const mktAvg = live.reduce((a, s) => a + s.changePct, 0) / live.length;
     sectors.top40 = { name: 'JSE Market Avg', chg: +mktAvg.toFixed(2), rel: 0 };
     for (const key of Object.keys(sectors)) {
-      if (key !== 'top40') sectors[key].rel = +(sectors[key].chg - mktAvg).toFixed(2);
+      if (key !== 'top40') {
+        sectors[key].rel = +(sectors[key].chg - mktAvg).toFixed(2);
+      }
     }
   } else {
     sectors.top40 = { name: 'JSE Market Avg', chg: null, rel: 0 };
   }
+
   return sectors;
 }
 
 const EMPTY_CIS = {
   total: 0, regime: 'NO DATA', regimeClass: 'neutral',
   components: {
-    macro: { score:0, weight:0.40, contrib:0 },
-    jse:   { score:0, weight:0.35, contrib:0 },
-    conf:  { score:0, weight:0.25, contrib:0 },
+    macro: { score: 0, weight: 0.40, contrib: 0 },
+    jse:   { score: 0, weight: 0.35, contrib: 0 },
+    conf:  { score: 0, weight: 0.25, contrib: 0 },
   },
 };
 
@@ -52,56 +56,64 @@ export default function App() {
   const [timeframe,  setTimeframe]  = useState('1D');
   const [returnMode, setReturnMode] = useState('ABS');
 
-  const { assets, stocks, status, error, lastFetch, progress, fetchLive, initFromCache, env } = useMarketData();
+  const { assets, stocks, status, error, lastFetch, progress, fetchLive, initFromCache } =
+    useMarketData();
+
   const { chartData: cisChartData, addReading, clearHistory } = useCISHistory();
   const { toasts, addToast, removeToast } = useToast();
 
-  // On mount: show cached data immediately, then silently refresh if stale
+  const prevStatusRef = useRef(status);
+
+  /* On mount: show cache immediately, refetch if stale */
   useEffect(() => {
     const isStale = initFromCache();
     if (isStale) {
-      setTimeout(() => fetchLive(true), 800); // tiny delay so UI paints first
+      // Small delay so UI paints the cached data first
+      setTimeout(() => fetchLive(true), 600);
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* Derived values */
   const sectors = useMemo(() => deriveSectors(stocks), [stocks]);
   const hasData = status === 'live' || status === 'cached';
 
   const cisInput = useMemo(() => ({
-    brentChg:       assets.brent?.changePct     ?? 0,
-    usdZarChg:      assets.usdZar?.changePct    ?? 0,
-    goldChg:        assets.gold?.changePct      ?? 0,
-    r2035Chg:       assets.r2035?.changePct     ?? 0,
-    top40Chg:       sectors.top40?.chg          ?? 0,
-    minersChg:      sectors['Gold Miners']?.chg ?? 0,
-    energyChg:      sectors.Energy?.chg         ?? 0,
-    banksChg:       sectors.Banks?.chg          ?? 0,
-    retailersChg:   sectors.Retailers?.chg      ?? 0,
-    industrialsChg: sectors.Industrials?.chg    ?? 0,
+    brentChg:       assets.brent?.changePct      ?? 0,
+    usdZarChg:      assets.usdZar?.changePct     ?? 0,
+    goldChg:        assets.gold?.changePct       ?? 0,
+    r2035Chg:       assets.r2035?.changePct      ?? 0,
+    top40Chg:       sectors.top40?.chg           ?? 0,
+    minersChg:      sectors['Gold Miners']?.chg  ?? 0,
+    energyChg:      sectors.Energy?.chg          ?? 0,
+    banksChg:       sectors.Banks?.chg           ?? 0,
+    retailersChg:   sectors.Retailers?.chg       ?? 0,
+    industrialsChg: sectors.Industrials?.chg     ?? 0,
   }), [assets, sectors]);
 
   const cis    = useMemo(() => hasData ? computeCIS(cisInput) : EMPTY_CIS, [hasData, cisInput]);
-  const alerts = useMemo(() => hasData ? computeAlerts({ assets, sectors, stocks }) : [], [hasData, assets, sectors, stocks]);
+  const alerts = useMemo(
+    () => hasData ? computeAlerts({ assets, sectors, stocks }) : [],
+    [hasData, assets, sectors, stocks]
+  );
 
-  // Record CIS history whenever a live fetch completes
-  const prevStatus = React.useRef(status);
+  /* Record CIS history when a live fetch completes */
   useEffect(() => {
-    const wasLoading = prevStatus.current === 'loading';
-    prevStatus.current = status;
-    if (status === 'live' && wasLoading && hasData) {
+    const was = prevStatusRef.current;
+    prevStatusRef.current = status;
+    if (status === 'live' && was === 'loading' && hasData) {
       addReading(cis.total, cis.regime, cis.regimeClass);
     }
   }, [status, hasData, cis, addReading]);
 
-  // Wrap fetchLive to add toast notification
+  /* Wrapped fetch — adds toast feedback */
   const handleFetch = useCallback(async (silent = false) => {
     const result = await fetchLive(silent);
     if (result?.success) {
-      const r2035src = result.assets?.r2035?.source ?? '';
-      const bondLabel = r2035src === 'SARB' ? '● SARB R2035' : r2035src === 'FRED' ? '● FRED proxy' : '';
-      addToast(`↻ Data updated · ${new Date().toLocaleTimeString('en-ZA',{hour:'2-digit',minute:'2-digit'})} SAST ${bondLabel}`, 'success');
+      const src = result.assets?.r2035?.source;
+      const bondLabel = src ? ` · R2035 via ${src}` : '';
+      addToast(`↻ Updated · ${new Date().toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })} SAST${bondLabel}`, 'success');
     } else if (result?.error && !silent) {
-      addToast(`✕ Fetch failed: ${result.error}`, 'error', 5000);
+      addToast(result.error, 'error', 6000);
     }
   }, [fetchLive, addToast]);
 
@@ -124,12 +136,13 @@ export default function App() {
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-tp font-sans">
       <Toast toasts={toasts} onRemove={removeToast} />
-      <LoadingOverlay status={status} progress={progress} error={error} env={env} onDismiss={() => {}} />
+      <LoadingOverlay status={status} progress={progress} error={error} env={null} onDismiss={() => {}} />
       <Sidebar page={page} setPage={setPage} cis={cis} status={status} lastFetch={lastFetch} />
 
       <div className="flex flex-col flex-1 overflow-hidden" style={{ marginLeft: 220 }}>
         <TopBar
-          page={page} status={status} error={error} lastFetch={lastFetch} progress={progress}
+          page={page}
+          status={status} error={error} lastFetch={lastFetch} progress={progress}
           onFetch={handleFetch}
           timeframe={timeframe}   setTimeframe={setTimeframe}
           returnMode={returnMode} setReturnMode={setReturnMode}

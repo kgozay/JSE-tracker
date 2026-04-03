@@ -1,10 +1,10 @@
 /**
- * SARB R2035 Bond Yield Proxy
- * Netlify Serverless Function — NO API KEY REQUIRED
+ * JSE Conflict Watch — SARB R2035 Bond Yield Proxy
+ * Netlify Serverless Function — CommonJS — NO API KEY REQUIRED
  *
- * Primary:  SARB REST API (custom.resbank.co.za/SarbWebApi)
- *           Series: MMRBGBR2035 — R2035 8.875% Dec 2035 benchmark yield
- * Fallback: FRED API (optional free key) → IRLTLT01ZAM156N (SA long rates)
+ * Primary:  SARB REST API — custom.resbank.co.za/SarbWebApi/WebIndicators/
+ *           Tries R2035 → MMRBGB10Y → MMRBGBR2030 in order
+ * Fallback: FRED API (set FRED_API_KEY env var in Netlify for reliability)
  *
  * GET /.netlify/functions/sarb
  */
@@ -12,20 +12,19 @@
 const https = require('https');
 
 const CORS = {
-  'Content-Type': 'application/json',
+  'Content-Type':                'application/json',
   'Access-Control-Allow-Origin': '*',
-  'Cache-Control': 'public, max-age=300, s-maxage=300',
+  'Cache-Control':               'public, max-age=300, s-maxage=300',
 };
 
 function get(url) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; JSE-ConflictWatch/2.0)',
-        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'Mozilla/5.0 (compatible; JSE-ConflictWatch/3.0)',
+        'Accept':     'application/json, text/plain, */*',
       },
     }, (res) => {
-      // Follow redirects
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
         return get(res.headers.location).then(resolve).catch(reject);
       }
@@ -33,139 +32,130 @@ function get(url) {
       res.on('data', c => chunks.push(c));
       res.on('end', () => {
         const body = Buffer.concat(chunks).toString('utf8');
-        try { resolve({ status: res.statusCode, body, json: JSON.parse(body) }); }
-        catch { resolve({ status: res.statusCode, body, json: null }); }
+        try   { resolve({ status: res.statusCode, json: JSON.parse(body) }); }
+        catch { resolve({ status: res.statusCode, json: null }); }
       });
     });
-    req.setTimeout(8000, () => req.destroy(new Error('Timeout')));
+    req.setTimeout(9000, () => req.destroy(new Error('SARB request timed out')));
     req.on('error', reject);
   });
 }
 
-const ok  = b => ({ statusCode: 200, headers: CORS, body: JSON.stringify(b) });
-const err = (m, c=502) => ({ statusCode: c, headers: CORS, body: JSON.stringify({ error: m }) });
+const ok  = body       => ({ statusCode: 200, headers: CORS, body: JSON.stringify(body) });
+const err = (msg, c=502) => ({ statusCode: c,   headers: CORS, body: JSON.stringify({ error: msg }) });
 
-/**
- * Parse SARB WebIndicators response.
- * SARB returns: { TimeseriesCode, Description, Frequency, data: [{Date, Value}] }
- * Values are daily — we want the latest two to compute daily change.
- */
-function parseSARB(json, seriesCode) {
+/* ── Parse SARB WebIndicators JSON ───────────────────────────────── */
+function parseSARB(json, series) {
   if (!json || !Array.isArray(json.data) || json.data.length === 0) {
-    throw new Error(`No data in SARB response for ${seriesCode}`);
+    throw new Error(`SARB ${series}: empty data array`);
   }
-  // Sort descending by date to get latest first
-  const sorted = [...json.data]
-    .filter(d => d.Value !== null && d.Value !== undefined && d.Value !== '')
+  const rows = json.data
+    .filter(d => d.Value !== null && d.Value !== '' && d.Value !== undefined)
     .sort((a, b) => new Date(b.Date) - new Date(a.Date));
 
-  if (sorted.length === 0) throw new Error('All SARB values are null');
+  if (rows.length === 0) throw new Error(`SARB ${series}: all values null`);
 
-  const latest = sorted[0];
-  const prev   = sorted[1] ?? sorted[0];
-
+  const latest    = rows[0];
+  const prev      = rows[1] ?? rows[0];
   const price     = parseFloat(latest.Value);
   const prevClose = parseFloat(prev.Value);
   const change    = +(price - prevClose).toFixed(4);
   const changePct = prevClose !== 0 ? +((change / prevClose) * 100).toFixed(4) : 0;
 
   return {
-    symbol:      seriesCode,
-    name:        json.Description ?? 'R2035 8.875% 2035',
+    symbol:    series,
+    name:      json.Description ?? `${series} Bond Yield`,
     price,
     change,
     changePct,
     prevClose,
-    date:        latest.Date,
-    prevDate:    prev.Date,
-    frequency:   json.Frequency ?? 'Daily',
-    source:      'SARB',
-    currency:    'ZAR',
-    unit:        '%',
-    timestamp:   new Date().toISOString(),
+    date:      latest.Date,
+    frequency: json.Frequency ?? 'Daily',
+    source:    'SARB',
+    unit:      '%',
+    currency:  'ZAR',
+    timestamp: new Date().toISOString(),
   };
 }
 
-/**
- * Parse FRED API observations response.
- * Returns: { observations: [{date, value}] }
- */
+/* ── Parse FRED observations ─────────────────────────────────────── */
 function parseFRED(json) {
-  if (!json?.observations?.length) throw new Error('No FRED observations');
-  const obs = json.observations.filter(o => o.value !== '.');
-  if (!obs.length) throw new Error('All FRED values are missing');
-  const sorted = [...obs].sort((a,b) => new Date(b.date) - new Date(a.date));
-  const latest = sorted[0];
-  const prev   = sorted[1] ?? sorted[0];
+  const obs = (json?.observations ?? []).filter(o => o.value !== '.' && o.value);
+  if (!obs.length) throw new Error('FRED: no observations');
+  const sorted = obs.sort((a, b) => new Date(b.date) - new Date(a.date));
+  const latest    = sorted[0];
+  const prev      = sorted[1] ?? sorted[0];
   const price     = parseFloat(latest.value);
   const prevClose = parseFloat(prev.value);
   const change    = +(price - prevClose).toFixed(4);
   const changePct = prevClose !== 0 ? +((change / prevClose) * 100).toFixed(4) : 0;
   return {
     symbol:    'IRLTLT01ZAM156N',
-    name:      'SA Long-Term Rate (FRED proxy)',
+    name:      'SA Long-Term Rate (FRED proxy for R2035)',
     price, change, changePct, prevClose,
     date:      latest.date,
     source:    'FRED',
-    currency:  'ZAR',
     unit:      '%',
-    timestamp: new Date().toISOString(),
+    currency:  'ZAR',
     isProxy:   true,
+    timestamp: new Date().toISOString(),
   };
 }
 
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: CORS, body: '' };
 
-  const FRED_KEY = process.env.FRED_API_KEY ?? '';
-
-  // ── Primary: SARB REST API ───────────────────────────────────────────────
-  // SARB series codes for R2035 benchmark bond yield
-  // The SARB WebIndicators REST API is free, public, no authentication required.
-  // Endpoint: https://custom.resbank.co.za/SarbWebApi/WebIndicators/{SeriesCode}/
-  // Series hierarchy: MMRB = Money Market Rates, Bond; GB = Government Bond
-  const SARB_SERIES = [
-    'MMRBGBR2035',  // R2035 8.875% Dec 2035 — primary target
-    'MMRBGB10Y',    // 10-year government benchmark — fallback
-    'MMRBGBR2030',  // R2030 — secondary fallback
-  ];
+  /* ── SARB REST API — multiple series in priority order ──────── */
+  // Base URL: https://custom.resbank.co.za/SarbWebApi/WebIndicators/{SeriesCode}/
+  // All series are free, public, no authentication.
+  // MMRBGBR2035 = R2035 8.875% Dec 2035 (primary target)
+  // MMRBGB10Y   = Generic 10-year government benchmark
+  // MMRBGBR2030 = R2030 (shorter-dated benchmark)
+  const SARB_SERIES = ['MMRBGBR2035', 'MMRBGB10Y', 'MMRBGBR2030'];
 
   for (const series of SARB_SERIES) {
     try {
       const url = `https://custom.resbank.co.za/SarbWebApi/WebIndicators/${series}/`;
       const res = await get(url);
-
       if (res.status === 200 && res.json) {
-        const data = parseSARB(res.json, series);
-        console.log(`[sarb] ✓ ${series} → ${data.price}%`);
-        return ok({ bond: data, series });
+        const bond = parseSARB(res.json, series);
+        console.log(`[sarb] ✓ ${series} → ${bond.price}% (${bond.date})`);
+        return ok({ bond, series });
       }
-      console.warn(`[sarb] ${series} returned ${res.status}`);
+      console.warn(`[sarb] ${series} → HTTP ${res.status}`);
     } catch (e) {
-      console.warn(`[sarb] ${series} failed: ${e.message}`);
+      console.warn(`[sarb] ${series} → ${e.message}`);
     }
   }
 
-  // ── Fallback: FRED API ───────────────────────────────────────────────────
-  // FRED series IRLTLT01ZAM156N = SA Long-term interest rates (monthly)
-  // Free API key from fred.stlouisfed.org — set FRED_API_KEY in Netlify env vars
-  // Works without a key but rate-limited; add key for reliability
-  if (FRED_KEY || true) { // always try FRED
-    try {
-      const fredUrl = `https://api.stlouisfed.org/fred/series/observations` +
-        `?series_id=IRLTLT01ZAM156N` +
-        `&api_key=${FRED_KEY || 'abcdefghijklmnopqrstuvwxyz012345'}` +
-        `&sort_order=desc&limit=5&file_type=json`;
-      const res = await get(fredUrl);
-      if (res.status === 200 && res.json) {
-        const data = parseFRED(res.json);
-        console.log(`[sarb] FRED fallback → ${data.price}%`);
-        return ok({ bond: data, series: 'FRED_FALLBACK', warning: 'Using FRED proxy — add FRED_API_KEY env var and set up SARB series for live R2035 data' });
-      }
-    } catch (e) {
-      console.warn(`[sarb] FRED failed: ${e.message}`);
+  /* ── FRED fallback ───────────────────────────────────────────── */
+  // Free key from fred.stlouisfed.org — set FRED_API_KEY in Netlify env vars.
+  // Without a key, requests are still allowed but may be rate-limited.
+  const FRED_KEY = process.env.FRED_API_KEY || '';
+  const keyParam = FRED_KEY ? `&api_key=${FRED_KEY}` : '';
+
+  try {
+    const fredUrl =
+      `https://api.stlouisfed.org/fred/series/observations` +
+      `?series_id=IRLTLT01ZAM156N${keyParam}` +
+      `&sort_order=desc&limit=5&file_type=json`;
+    const res = await get(fredUrl);
+    if (res.status === 200 && res.json) {
+      const bond = parseFRED(res.json);
+      console.log(`[sarb] FRED fallback → ${bond.price}%`);
+      return ok({
+        bond,
+        series: 'FRED_FALLBACK',
+        warning: 'SARB API unreachable — using FRED proxy (monthly data). Set FRED_API_KEY env var in Netlify for reliability.',
+      });
     }
+    console.warn(`[sarb] FRED → HTTP ${res.status}`);
+  } catch (e) {
+    console.warn(`[sarb] FRED → ${e.message}`);
   }
 
-  return err('Could not fetch R2035 yield from SARB or FRED. Both sources unavailable. Check Netlify function logs.');
+  return err(
+    'Could not fetch R2035 yield from SARB or FRED. ' +
+    'Check Netlify function logs. The dashboard will still work without bond data.'
+  );
 };
