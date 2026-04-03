@@ -150,14 +150,25 @@ export function useMarketData() {
       const fetchOpts = { signal: ctrl.signal };
       const symbolStr = ALL_YAHOO_SYMBOLS.join(',');
 
-      /* Single Yahoo Finance fetch — includes ^ZA10Y for bond yield */
+      /* Fetch Yahoo Finance and SARB/FRED (for bond yield) concurrently */
       let yahooResult;
+      let sarbResult;
       try {
-        const r = await fetch(`/.netlify/functions/quotes?symbols=${encodeURIComponent(symbolStr)}`, fetchOpts);
-        if (!r.ok) throw new Error(`Yahoo HTTP ${r.status}`);
-        yahooResult = { status: 'fulfilled', value: await r.json() };
+        const [rYahoo, rSarb] = await Promise.allSettled([
+          fetch(`/.netlify/functions/quotes?symbols=${encodeURIComponent(symbolStr)}`, fetchOpts).then(async r => {
+            if (!r.ok) throw new Error(`Yahoo HTTP ${r.status}`);
+            return r.json();
+          }),
+          fetch(`/.netlify/functions/sarb`, fetchOpts).then(async r => {
+            if (!r.ok) throw new Error(`SARB HTTP ${r.status}`);
+            return r.json();
+          })
+        ]);
+        yahooResult = rYahoo;
+        sarbResult = rSarb;
       } catch(fetchErr) {
         yahooResult = { status: 'rejected', reason: fetchErr };
+        sarbResult = { status: 'rejected', reason: fetchErr };
       }
       setProgress('Processing market data…');
 
@@ -175,9 +186,13 @@ export function useMarketData() {
         console.error('[useMarketData] Yahoo failed:', yahooResult.reason?.message);
       }
 
-      /* ── Bond yield comes via ^ZA10Y in the Yahoo batch ── */
-      // No separate SARB fetch needed — applyQuotes maps ^ZA10Y → r2035 automatically.
-      // If ^ZA10Y is missing (market closed / weekend), r2035 stays null which is fine.
+      /* ── SARB Bond Yield ── */
+      let bond = null;
+      if (sarbResult.status === 'fulfilled') {
+        bond = sarbResult.value?.bond ?? null;
+      } else {
+        console.error('[useMarketData] SARB/FRED failed:', sarbResult.reason?.message);
+      }
 
       /* If Yahoo failed completely, throw */
       if (Object.keys(quotes).length === 0) {
@@ -193,6 +208,10 @@ export function useMarketData() {
       const emptyS = makeEmptyStocks();
       const { assets: a, stocks: s } = applyQuotes(quotes, emptyA, emptyS);
 
+      if (bond && bond.price != null) {
+        a.r2035 = { ...a.r2035, ...bond, isLive: true };
+      }
+
       setAssets(a);
       setStocks(s);
       setStatus('live');
@@ -201,7 +220,7 @@ export function useMarketData() {
       setProgress('');
       lastFetchTs.current = Date.now();
 
-      saveCache(quotes, null);
+      saveCache(quotes, bond);
       return { success: true, assets: a, stocks: s };
 
     } catch (e) {

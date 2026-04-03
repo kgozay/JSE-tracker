@@ -63,24 +63,14 @@ function get(url, reqHeaders, followRedirects) {
 }
 
 /* ── Step 1: Fetch Yahoo Finance homepage cookies ────────────────── */
-function fetchCookies() {
-  return new Promise(function(resolve, reject) {
-    const req = https.get('https://finance.yahoo.com/', {
-      headers: {
-        'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-    }, function(res) {
-      res.resume(); // discard body
-      const raw = res.headers['set-cookie'] || [];
-      if (!raw.length) return reject(new Error('Yahoo Finance: no Set-Cookie headers received'));
-      const cookie = raw.map(function(c) { return c.split(';')[0].trim(); }).filter(Boolean).join('; ');
-      resolve(cookie);
-    });
-    req.setTimeout(10000, function() { req.destroy(new Error('Cookie fetch timeout')); });
-    req.on('error', reject);
+async function fetchCookies() {
+  const res = await get('https://finance.yahoo.com/', {
+    'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   });
+  const raw = res.headers['set-cookie'] || [];
+  if (!raw.length) throw new Error('Yahoo Finance: no Set-Cookie headers received');
+  const cookie = raw.map(function(c) { return c.split(';')[0].trim(); }).filter(Boolean).join('; ');
+  return cookie;
 }
 
 /* ── Step 2: Exchange cookies for a crumb ────────────────────────── */
