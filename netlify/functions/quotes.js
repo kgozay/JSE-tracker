@@ -2,13 +2,15 @@
  * JSE Conflict Watch — Yahoo Finance Bulk Quote Proxy
  * Netlify Serverless Function — CommonJS — NO API KEY REQUIRED
  *
- * Fetches all JSE stocks + macro assets in ONE request from Yahoo Finance.
- * Proxies server-side to avoid browser CORS blocks.
- *
- * GET /.netlify/functions/quotes?symbols=SOL.JO,GC=F,USDZAR=X,...
+ * FIXES (v7 → v8, 2025-04):
+ *  1. gzip decompression — was sending Accept-Encoding: gzip but never decompressing → JSON.parse failed silently
+ *  2. Cookie + crumb handshake — Yahoo Finance now requires this for server-side requests from cloud IPs
+ *  3. Switched to v8/finance/quote endpoint (v7 deprecated + now requires crumb)
+ *  4. Module-level crumb cache — reused across warm Lambda invocations (crumbs last ~1 hr)
  */
 
 const https = require('https');
+const zlib  = require('zlib');
 
 const CORS = {
   'Content-Type':                'application/json',
@@ -16,56 +18,116 @@ const CORS = {
   'Cache-Control':               'public, max-age=60, s-maxage=60',
 };
 
-/* ── HTTP helper with redirect following and timeout ────────────── */
-function get(url, extraHeaders) {
+/* ── Crumb cache (module-level — survives warm Lambda restarts) ──── */
+let _crumbCache = null;   // { crumb: string, cookie: string, ts: number }
+const CRUMB_TTL = 55 * 60 * 1000;  // 55 min (Yahoo crumbs last ~1 hr)
+
+/* ── HTTP GET with automatic gzip/deflate/br decompression ────────── */
+function get(url, reqHeaders, followRedirects) {
+  if (followRedirects === undefined) followRedirects = 5;
   return new Promise((resolve, reject) => {
     const options = {
-      headers: {
-        'User-Agent':      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      headers: Object.assign({
+        'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept':          'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Referer':         'https://finance.yahoo.com/',
-        'Origin':          'https://finance.yahoo.com',
-        ...(extraHeaders || {}),
-      },
+        /* No Accept-Encoding here — we handle decompression explicitly below */
+      }, reqHeaders || {}),
     };
-    const req = https.get(url, options, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        return get(res.headers.location, extraHeaders).then(resolve).catch(reject);
+
+    const req = https.get(url, options, function(res) {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && followRedirects > 0) {
+        res.resume();
+        return get(res.headers.location, reqHeaders, followRedirects - 1).then(resolve).catch(reject);
       }
+
+      const enc = (res.headers['content-encoding'] || '').toLowerCase();
+      let stream = res;
+      if (enc === 'gzip')         stream = res.pipe(zlib.createGunzip());
+      else if (enc === 'deflate') stream = res.pipe(zlib.createInflate());
+      else if (enc === 'br')      stream = res.pipe(zlib.createBrotliDecompress());
+
       const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => {
+      stream.on('data', function(c) { chunks.push(c); });
+      stream.on('end', function() {
         const body = Buffer.concat(chunks).toString('utf8');
-        try   { resolve({ status: res.statusCode, json: JSON.parse(body) }); }
-        catch { resolve({ status: res.statusCode, json: null, raw: body.slice(0, 200) }); }
+        try   { resolve({ status: res.statusCode, headers: res.headers, json: JSON.parse(body) }); }
+        catch { resolve({ status: res.statusCode, headers: res.headers, json: null, raw: body.slice(0, 500) }); }
       });
+      stream.on('error', reject);
     });
-    req.setTimeout(10000, () => req.destroy(new Error('Yahoo Finance request timed out after 10s')));
+
+    req.setTimeout(12000, function() { req.destroy(new Error('Yahoo Finance request timed out after 12s')); });
     req.on('error', reject);
   });
 }
 
-const ok  = body       => ({ statusCode: 200, headers: CORS, body: JSON.stringify(body) });
-const err = (msg, c=502) => ({ statusCode: c,   headers: CORS, body: JSON.stringify({ error: msg }) });
+/* ── Step 1: Fetch Yahoo Finance homepage cookies ────────────────── */
+function fetchCookies() {
+  return new Promise(function(resolve, reject) {
+    const req = https.get('https://finance.yahoo.com/', {
+      headers: {
+        'User-Agent':      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    }, function(res) {
+      res.resume(); // discard body
+      const raw = res.headers['set-cookie'] || [];
+      if (!raw.length) return reject(new Error('Yahoo Finance: no Set-Cookie headers received'));
+      const cookie = raw.map(function(c) { return c.split(';')[0].trim(); }).filter(Boolean).join('; ');
+      resolve(cookie);
+    });
+    req.setTimeout(10000, function() { req.destroy(new Error('Cookie fetch timeout')); });
+    req.on('error', reject);
+  });
+}
 
+/* ── Step 2: Exchange cookies for a crumb ────────────────────────── */
+async function fetchCrumb(cookie) {
+  const res = await get(
+    'https://query2.finance.yahoo.com/v1/test/getcrumb',
+    { Cookie: cookie, Accept: 'text/plain, */*' }
+  );
+  if (res.status !== 200) throw new Error('getcrumb returned HTTP ' + res.status);
+  /* Crumb endpoint returns plain text — res.json will be null, use res.raw */
+  const crumb = (res.raw || (res.json != null ? String(res.json) : '')).trim();
+  if (!crumb || crumb.length < 2) throw new Error('getcrumb returned empty or invalid crumb: ' + JSON.stringify(crumb));
+  return crumb;
+}
+
+/* ── Get or refresh crumb (cached) ──────────────────────────────── */
+async function getOrRefreshCrumb() {
+  const now = Date.now();
+  if (_crumbCache && (now - _crumbCache.ts) < CRUMB_TTL) {
+    console.log('[quotes] Using cached crumb (age ' + Math.round((now - _crumbCache.ts) / 1000) + 's)');
+    return _crumbCache;
+  }
+  console.log('[quotes] Fetching fresh cookie + crumb from Yahoo Finance…');
+  const cookie = await fetchCookies();
+  const crumb  = await fetchCrumb(cookie);
+  _crumbCache  = { cookie: cookie, crumb: crumb, ts: now };
+  console.log('[quotes] Crumb acquired: ' + crumb.slice(0, 10) + '… (cookie: ' + cookie.slice(0, 40) + '…)');
+  return _crumbCache;
+}
+
+/* ── Normalise a Yahoo Finance quote object ──────────────────────── */
 function normalise(q) {
   if (!q || q.regularMarketPrice == null) return null;
   return {
     symbol:      q.symbol,
     name:        q.shortName || q.longName || q.symbol,
     price:       q.regularMarketPrice,
-    change:      q.regularMarketChange        ?? 0,
-    changePct:   q.regularMarketChangePercent ?? 0,
-    prevClose:   q.regularMarketPreviousClose ?? q.regularMarketPrice,
-    dayHigh:     q.regularMarketDayHigh       ?? null,
-    dayLow:      q.regularMarketDayLow        ?? null,
-    volume:      q.regularMarketVolume        ?? 0,
-    currency:    q.currency                   ?? 'USD',
-    marketState: q.marketState                ?? 'CLOSED',
-    week52High:  q.fiftyTwoWeekHigh           ?? null,
-    week52Low:   q.fiftyTwoWeekLow            ?? null,
+    change:      q.regularMarketChange        != null ? q.regularMarketChange        : 0,
+    changePct:   q.regularMarketChangePercent != null ? q.regularMarketChangePercent : 0,
+    prevClose:   q.regularMarketPreviousClose != null ? q.regularMarketPreviousClose : q.regularMarketPrice,
+    dayHigh:     q.regularMarketDayHigh       != null ? q.regularMarketDayHigh       : null,
+    dayLow:      q.regularMarketDayLow        != null ? q.regularMarketDayLow        : null,
+    volume:      q.regularMarketVolume        != null ? q.regularMarketVolume        : 0,
+    currency:    q.currency                   != null ? q.currency                   : 'USD',
+    marketState: q.marketState                != null ? q.marketState                : 'CLOSED',
+    week52High:  q.fiftyTwoWeekHigh           != null ? q.fiftyTwoWeekHigh           : null,
+    week52Low:   q.fiftyTwoWeekLow            != null ? q.fiftyTwoWeekLow            : null,
     timestamp:   new Date().toISOString(),
   };
 }
@@ -77,46 +139,77 @@ const FIELDS = [
   'shortName', 'longName', 'currency', 'marketState',
 ].join(',');
 
-/* Try multiple Yahoo Finance hosts — query1 and query2 are both valid */
 const YF_HOSTS = [
   'query2.finance.yahoo.com',
   'query1.finance.yahoo.com',
 ];
 
+/* ── Main Yahoo Finance fetch ─────────────────────────────────────── */
 async function fetchYahoo(symbols) {
-  const path = `/v7/finance/quote?symbols=${encodeURIComponent(symbols)}&fields=${FIELDS}&lang=en-US&region=US&corsDomain=finance.yahoo.com`;
+  let auth = { cookie: '', crumb: '' };
+  try {
+    auth = await getOrRefreshCrumb();
+  } catch (e) {
+    console.error('[quotes] Crumb acquisition failed: ' + e.message + ' — attempting without crumb');
+  }
 
-  for (const host of YF_HOSTS) {
-    try {
-      const url = `https://${host}${path}`;
-      console.log(`[quotes] Trying ${host}…`);
-      const res = await get(url);
+  const encodedSymbols = encodeURIComponent(symbols);
+  const crumbParam     = auth.crumb ? ('&crumb=' + encodeURIComponent(auth.crumb)) : '';
 
-      if (res.status !== 200) {
-        console.warn(`[quotes] ${host} returned HTTP ${res.status}`);
-        continue;
+  /* Try v8 (preferred, requires crumb) then v7 (legacy fallback) */
+  const apiVersions = [
+    '/v8/finance/quote?symbols=' + encodedSymbols + '&fields=' + FIELDS + '&lang=en-US&region=US&corsDomain=finance.yahoo.com' + crumbParam,
+    '/v7/finance/quote?symbols=' + encodedSymbols + '&fields=' + FIELDS + '&lang=en-US&region=US&corsDomain=finance.yahoo.com' + crumbParam,
+  ];
+
+  for (const endpoint of apiVersions) {
+    for (const host of YF_HOSTS) {
+      try {
+        const url = 'https://' + host + endpoint;
+        console.log('[quotes] Trying ' + host + endpoint.slice(0, 70) + '…');
+
+        const res = await get(url, {
+          Cookie:  auth.cookie,
+          Referer: 'https://finance.yahoo.com/',
+          Origin:  'https://finance.yahoo.com',
+        });
+
+        if (res.status === 401) {
+          console.warn('[quotes] ' + host + ' 401 Unauthorized — invalidating crumb cache');
+          _crumbCache = null; // force re-fetch on next call
+          continue;
+        }
+        if (res.status !== 200) {
+          console.warn('[quotes] ' + host + ' returned HTTP ' + res.status + ' — ' + (res.raw || ''));
+          continue;
+        }
+        if (!res.json) {
+          console.warn('[quotes] ' + host + ' returned non-JSON after decompression: ' + (res.raw || '').slice(0, 200));
+          continue;
+        }
+
+        const results = res.json && res.json.quoteResponse && res.json.quoteResponse.result;
+        if (!Array.isArray(results)) {
+          const yErr = res.json && res.json.quoteResponse && res.json.quoteResponse.error;
+          console.warn('[quotes] ' + host + ' no results array — ' + (yErr ? yErr.description : JSON.stringify(res.json).slice(0, 150)));
+          continue;
+        }
+
+        console.log('[quotes] ✓ ' + host + ' returned ' + results.length + ' results');
+        return results;
+      } catch (e) {
+        console.warn('[quotes] ' + host + ' threw: ' + e.message);
       }
-      if (!res.json) {
-        console.warn(`[quotes] ${host} returned non-JSON: ${res.raw}`);
-        continue;
-      }
-
-      const results = res.json?.quoteResponse?.result;
-      if (!Array.isArray(results)) {
-        const yErr = res.json?.quoteResponse?.error;
-        console.warn(`[quotes] ${host} no results array — ${yErr?.description ?? 'unknown'}`);
-        continue;
-      }
-
-      return results; // success
-    } catch (e) {
-      console.warn(`[quotes] ${host} threw: ${e.message}`);
     }
   }
-  return null; // all hosts failed
+
+  return null; // all attempts failed
 }
 
-exports.handler = async (event) => {
+const ok  = function(body)        { return { statusCode: 200, headers: CORS, body: JSON.stringify(body) }; };
+const err = function(msg, c)      { return { statusCode: c || 502, headers: CORS, body: JSON.stringify({ error: msg }) }; };
+
+exports.handler = async function(event) {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: CORS, body: '' };
 
   const qs      = event.queryStringParameters || {};
@@ -131,7 +224,11 @@ exports.handler = async (event) => {
     const results = await fetchYahoo(symList.join(','));
 
     if (!results) {
-      return err('Yahoo Finance is currently unavailable on both query1 and query2. JSE may be closed or Yahoo may be blocking requests. Try again in a few minutes.');
+      return err(
+        'Yahoo Finance unavailable on all endpoints. ' +
+        'Check Netlify function logs (Functions tab → quotes → View log). ' +
+        'JSE may be closed, or Yahoo may be blocking this IP. Try again in 5 minutes.'
+      );
     }
 
     const quotes = {};
@@ -142,18 +239,18 @@ exports.handler = async (event) => {
       else     empty++;
     }
 
-    console.log(`[quotes] ✓ ${resolved} quotes resolved, ${empty} empty, ${symList.length - results.length} not returned`);
+    console.log('[quotes] ✓ ' + resolved + ' resolved, ' + empty + ' empty, ' + (symList.length - results.length) + ' not returned by Yahoo');
 
     return ok({
-      quotes,
+      quotes:    quotes,
       requested: symList.length,
       returned:  resolved,
-      empty,
+      empty:     empty,
       timestamp: new Date().toISOString(),
     });
 
   } catch (e) {
-    console.error('[quotes] Unhandled error:', e.message);
-    return err(`Server error: ${e.message}`);
+    console.error('[quotes] Unhandled error:', e.message, e.stack);
+    return err('Server error: ' + e.message);
   }
 };
