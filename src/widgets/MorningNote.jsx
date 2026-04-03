@@ -65,7 +65,7 @@ export default function MorningNote({ assets, sectors, cis, stocks, hasData }) {
   if (!hasData) {
     return (
       <Card className="h-full">
-        <CardHeader title="AI Morning Note" badge="CLAUDE AI" badgeVariant="live" />
+        <CardHeader title="AI Morning Note" badge="GEMINI AI" badgeVariant="live" />
         <div className="flex items-center justify-center h-32 font-mono text-[10px] text-tm text-center">
           Fetch live data first, then generate your note
         </div>
@@ -82,7 +82,7 @@ export default function MorningNote({ assets, sectors, cis, stocks, hasData }) {
         </span>
         <div className="flex items-center gap-2">
           <span className="font-mono text-[8px] bg-bull/10 text-bull border border-bull/30 px-1.5 py-0.5 rounded-sm">
-            CLAUDE AI
+            GEMINI AI
           </span>
           {note && (
             <button
@@ -111,7 +111,7 @@ export default function MorningNote({ assets, sectors, cis, stocks, hasData }) {
       {!loading && !note && !error && (
         <div className="flex flex-col items-center justify-center h-36 gap-3 border border-dashed border-bd/50 rounded">
           <span className="font-mono text-[9px] text-ts text-center leading-relaxed px-4">
-            Generates a real analyst note using Claude AI,<br />
+            Generates a real analyst note using Gemini AI,<br />
             grounded in your live JSE + macro data.
           </span>
           <button
@@ -121,7 +121,7 @@ export default function MorningNote({ assets, sectors, cis, stocks, hasData }) {
             ✦ GENERATE NOTE
           </button>
           <span className="font-mono text-[7px] text-tm/60">
-            Requires ANTHROPIC_API_KEY in Netlify env vars
+            Requires free GEMINI_API_KEY — get one at aistudio.google.com
           </span>
         </div>
       )}
@@ -137,7 +137,7 @@ export default function MorningNote({ assets, sectors, cis, stocks, hasData }) {
           <div className="h-2.5 bg-bd/40 rounded animate-pulse w-4/5" />
           <div className="h-2.5 bg-bd/40 rounded animate-pulse w-full mt-3" />
           <div className="h-2.5 bg-bd/40 rounded animate-pulse w-3/5" />
-          <span className="block font-mono text-[8px] text-ts pt-2">Asking Claude for market insights…</span>
+          <span className="block font-mono text-[8px] text-ts pt-2">Asking Gemini for market insights…</span>
         </div>
       )}
 
@@ -146,9 +146,9 @@ export default function MorningNote({ assets, sectors, cis, stocks, hasData }) {
         <div className="border border-bear/30 bg-bear/5 rounded p-3 space-y-2">
           <p className="font-mono text-[9px] text-bear font-semibold">Generation failed</p>
           <p className="font-mono text-[9px] text-ts leading-relaxed">{error}</p>
-          {error.includes('ANTHROPIC_API_KEY') && (
+          {error.includes('GEMINI_API_KEY') && (
             <p className="font-mono text-[8px] text-tm leading-relaxed">
-              → Netlify dashboard → Site settings → Environment variables → Add <span className="text-warn">ANTHROPIC_API_KEY</span>
+              → Get free key at aistudio.google.com/app/apikey → Netlify → Site settings → Environment variables → Key: <span className="text-warn">GEMINI_API_KEY</span>
             </p>
           )}
           <button
@@ -169,7 +169,7 @@ export default function MorningNote({ assets, sectors, cis, stocks, hasData }) {
           {meta && (
             <div className="flex items-center gap-3 pt-2 border-t border-bd/40 mt-3">
               <span className="font-mono text-[7px] text-tm/60">
-                {meta.model?.replace('claude-', 'Claude ') ?? 'Claude'}
+                {meta.model?.replace('gemini-', 'Gemini ') ?? 'Gemini'}
               </span>
               <span className="font-mono text-[7px] text-tm/60">
                 {meta.tokens_in}↑ {meta.tokens_out}↓ tokens
