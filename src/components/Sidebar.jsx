@@ -92,7 +92,7 @@ export default function Sidebar({ page, setPage, cis, status, lastFetch }) {
           <span className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', dotCls)} />
           <span className="font-mono text-[8px] text-tm">{statusLabel}</span>
         </div>
-        <div className="font-mono text-[8px] text-tm">Yahoo Finance + SARB API</div>
+        <div className="font-mono text-[8px] text-tm">Yahoo Finance (incl. ^ZA10Y)</div>
         <div className="font-mono text-[7px] text-tm mt-0.5">R2035 · 8.875% Dec 2035</div>
       </div>
     </aside>

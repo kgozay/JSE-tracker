@@ -18,10 +18,10 @@ function FetchPrompt({ onFetch }) {
       <div className="font-mono text-[11px] text-tm mb-2 leading-relaxed max-w-md">
         Click the button below to fetch real-time prices for all 33 JSE stocks,
         Brent crude, gold, platinum, palladium, USD/ZAR, coal — plus the{' '}
-        <span className="text-warn">R2035 bond yield direct from the SARB API</span>.
+        <span className="text-warn">SA 10Y bond yield (^ZA10Y)</span>.
       </div>
       <div className="font-mono text-[9px] text-tm mb-6">
-        All fetched in parallel · No API key required · Yahoo Finance + SARB
+        All fetched in one request · No API key required · Yahoo Finance
       </div>
       <button
         onClick={onFetch}
@@ -49,7 +49,7 @@ export default function Overview({
           <MarketHours />
           <div className="font-mono text-[9px] text-tm">
             Data sources: <span className="text-ts">Yahoo Finance (stocks/commodities)</span>{' '}
-            + <span className="text-warn">SARB REST API (R2035 bond yield)</span>
+            + <span className="text-warn">SA 10Y Bond Yield (^ZA10Y via Yahoo Finance)</span>
           </div>
         </div>
         <FetchPrompt onFetch={onFetch} />
@@ -73,7 +73,7 @@ export default function Overview({
               ● R2035 live from SARB · {assets.r2035.date ?? ''}
             </span>
           )}
-          <span className="text-ts">Yahoo Finance + SARB · Auto-refresh available</span>
+          <span className="text-ts">Yahoo Finance · Auto-refresh available</span>
         </div>
       </div>
 

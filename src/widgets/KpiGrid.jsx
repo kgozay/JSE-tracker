@@ -41,9 +41,8 @@ function KpiCard({ assetKey, asset }) {
       <div className="flex items-baseline gap-1.5 mt-1.5">
         <span className={clsx('font-mono text-[11px] font-semibold', CHG_CLR[chgKey])}>{chgStr}</span>
         <span className="font-mono text-[9px] text-tm">{unit}</span>
-        {isLive && !isProxy && !asset.isStale && source !== 'STATIC_FALLBACK' && <span className="font-mono text-[7px] text-bull ml-auto">● {source ?? 'LIVE'}</span>}
-        {isLive && source === 'STATIC_FALLBACK' && <span className="font-mono text-[7px] text-warn ml-auto">● STATIC EST</span>}
-        {isProxy && !asset.isStale && <span className="font-mono text-[7px] text-warn ml-auto">● PROXY</span>}
+        {isLive && !isProxy && <span className="font-mono text-[7px] text-bull ml-auto">● LIVE</span>}
+        {isProxy && <span className="font-mono text-[7px] text-warn ml-auto">● PROXY</span>}
       </div>
     </div>
   );

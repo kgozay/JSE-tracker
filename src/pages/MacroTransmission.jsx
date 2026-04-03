@@ -203,7 +203,7 @@ export default function MacroTransmission({ assets, alerts, hasData }) {
   const goldChg  = assets.gold?.changePct;
   const r2035Chg = assets.r2035?.changePct;
   const r2035Prc = assets.r2035?.price;
-  const r2035Src = assets.r2035?.source ?? 'SARB';
+  const r2035Src = 'Yahoo ^ZA10Y';
 
   const fmt = (v, label) => v != null ? `${label} ${v>=0?'+':''}${v.toFixed(1)}%` : `${label} (fetch data)`;
 
@@ -305,7 +305,7 @@ export default function MacroTransmission({ assets, alerts, hasData }) {
         <Card>
           <CardHeader
             title="R2035 Bond Yield + SARB Repo — Historical Path"
-            badge={assets.r2035?.source ? `SOURCE: ${assets.r2035.source}` : 'REFERENCE'}
+            badge='SOURCE: YAHOO ^ZA10Y'
           />
           {assets.r2035?.isLive && (
             <div className="flex items-center gap-3 mb-3 p-2 bg-bull/6 border border-bull/20 rounded">
@@ -314,7 +314,7 @@ export default function MacroTransmission({ assets, alerts, hasData }) {
               <span className={clsx('font-mono text-[10px]', (assets.r2035.changePct??0) > 0 ? 'text-bear' : 'text-bull')}>
                 {(assets.r2035.changePct??0) >= 0 ? '+' : ''}{assets.r2035.changePct?.toFixed(3)}%
               </span>
-              <span className="font-mono text-[8px] text-tm ml-auto">{assets.r2035.source} · {assets.r2035.date ?? ''}</span>
+              <span className="font-mono text-[8px] text-tm ml-auto">Yahoo ^ZA10Y · live</span>
             </div>
           )}
           <div style={{ height: assets.r2035?.isLive ? 200 : 230 }}>

@@ -6,14 +6,15 @@ export const MACRO_SYMBOLS = {
   palladium: { symbol: 'PA=F',     name: 'Palladium',    unit: '$/oz',  icon: '⚗️', invert: false },
   usdZar:    { symbol: 'USDZAR=X', name: 'USD/ZAR',      unit: 'ZAR',   icon: '💱', invert: true  },
   coal:      { symbol: 'MTF=F',    name: 'Coal Futures', unit: '$/t',   icon: '⛏️', invert: false },
-  // R2035 fetched separately via /.netlify/functions/sarb — NOT via Yahoo Finance
+  // SA 10Y govt bond yield — fetched via Yahoo Finance ^ZA10Y alongside all other symbols
+  r2035:     { symbol: '^ZA10Y',   name: 'SA 10Y Bond Yield', unit: '%', icon: '🏛️', invert: true },
 };
 
-// R2035 bond metadata (not a Yahoo Finance symbol)
+// R2035/SA10Y bond metadata
 export const R2035_META = {
   key:    'r2035',
   name:   'R2035 Bond Yield',
-  detail: '8.875% Dec 2035',
+  detail: 'SA 10Y Govt Bond (Yahoo ^ZA10Y)',
   unit:   '%',
   icon:   '🏛️',
   invert: true, // Rising yield = bearish for JSE (tighter conditions)
