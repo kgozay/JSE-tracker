@@ -1,79 +1,67 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-const INTERVALS = {
-  '1m':  60_000,
-  '5m':  300_000,
-  '15m': 900_000,
-  '30m': 1_800_000,
-  off:   null,
+export const INTERVALS = {
+  off:  null,
+  '1m': 60_000,
+  '5m': 300_000,
+  '15m':900_000,
+  '30m':1_800_000,
 };
 
 export function useAutoRefresh(onRefresh) {
-  const [interval, setInterval_] = useState('off');
-  const [nextIn,   setNextIn]    = useState(null);   // seconds until next refresh
-  const timerRef   = useRef(null);
-  const countRef   = useRef(null);
-  const startedRef = useRef(null);
+  const [intervalKey, setIntervalKey] = useState('off');
+  const [nextIn,      setNextIn]      = useState(null);
 
-  const clearAll = useCallback(() => {
-    clearInterval(timerRef.current);
-    clearInterval(countRef.current);
+  const timerRef    = useRef(null);
+  const countRef    = useRef(null);
+  const startedRef  = useRef(null);
+  const onRefreshRef = useRef(onRefresh);
+
+  // Keep ref in sync so timer always calls the latest version of onRefresh
+  useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
+
+  const stop = useCallback(() => {
+    if (timerRef.current)  clearInterval(timerRef.current);
+    if (countRef.current)  clearInterval(countRef.current);
     timerRef.current  = null;
     countRef.current  = null;
     startedRef.current = null;
     setNextIn(null);
   }, []);
 
-  const start = useCallback((intervalKey) => {
-    clearAll();
+  useEffect(() => {
+    stop();
     const ms = INTERVALS[intervalKey];
     if (!ms) return;
 
     startedRef.current = Date.now();
 
-    // Main refresh timer
+    // Main refresh — always reads latest onRefresh via ref
     timerRef.current = setInterval(() => {
-      onRefresh();
+      onRefreshRef.current?.();
       startedRef.current = Date.now();
     }, ms);
 
-    // Countdown ticker (every second)
+    // Countdown ticker
     countRef.current = setInterval(() => {
-      const elapsed = Date.now() - (startedRef.current ?? Date.now());
+      const elapsed   = Date.now() - (startedRef.current ?? Date.now());
       const remaining = Math.max(0, Math.ceil((ms - elapsed) / 1000));
       setNextIn(remaining);
     }, 1000);
 
     setNextIn(Math.ceil(ms / 1000));
-  }, [onRefresh, clearAll]);
+    return stop;
+  }, [intervalKey, stop]);
 
-  // React to interval changes
-  useEffect(() => {
-    if (interval === 'off') {
-      clearAll();
-    } else {
-      start(interval);
-    }
-    return clearAll;
-  }, [interval]);
-
-  const setIntervalKey = useCallback((key) => {
-    setInterval_(key);
-  }, []);
-
-  function fmtCountdown(secs) {
-    if (!secs) return '';
-    if (secs < 60) return `${secs}s`;
-    return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+  function fmtCountdown(s) {
+    if (!s) return '';
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
   }
 
   return {
-    intervalKey: interval,
+    intervalKey,
     setIntervalKey,
-    nextIn,
-    countdown: fmtCountdown(nextIn),
-    isActive: interval !== 'off',
+    countdown:  fmtCountdown(nextIn),
+    isActive:   intervalKey !== 'off',
   };
 }
-
-export { INTERVALS };

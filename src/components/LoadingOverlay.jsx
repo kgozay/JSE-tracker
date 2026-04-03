@@ -1,13 +1,9 @@
 import React from 'react';
-import clsx from 'clsx';
 
-export default function LoadingOverlay({ status, progress, error, env, onDismiss }) {
-  const isLoading    = status === 'loading';
-  const isError      = status === 'error';
-  const isStackblitz = env === 'stackblitz' || env === 'codesandbox';
-  const show         = isLoading || (isError && !isStackblitz);
-
-  if (!show) return null;
+export default function LoadingOverlay({ status, progress, error, onDismiss }) {
+  const isLoading = status === 'loading';
+  const isError   = status === 'error';
+  if (!isLoading && !isError) return null;
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-bg/90 backdrop-blur-sm">
@@ -15,15 +11,13 @@ export default function LoadingOverlay({ status, progress, error, env, onDismiss
 
         {isLoading && (
           <>
-            <div className="relative w-12 h-12">
+            <div className="relative w-12 h-12 flex-shrink-0">
               <div className="absolute inset-0 rounded-full border-2 border-bd" />
               <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-warn animate-spin" />
             </div>
             <div className="text-center">
               <div className="font-display text-[22px] tracking-[3px] text-warn mb-1">FETCHING LIVE DATA</div>
-              <div className="font-mono text-[10px] text-ts tracking-[1px]">
-                {progress || 'Connecting to Yahoo Finance...'}
-              </div>
+              <div className="font-mono text-[10px] text-ts">{progress || 'Connecting to Yahoo Finance…'}</div>
             </div>
             <div className="flex gap-1.5">
               {[0,1,2].map(i => (
@@ -32,28 +26,36 @@ export default function LoadingOverlay({ status, progress, error, env, onDismiss
               ))}
             </div>
             <div className="font-mono text-[9px] text-tm text-center leading-relaxed">
-              All symbols fetched in a single request.<br />No API key · Yahoo Finance Free API
+              All {' '}<span className="text-warn">40+ symbols</span>{' '} fetched in a single request<br />
+              Yahoo Finance · No API key required
             </div>
           </>
         )}
 
-        {isError && !isStackblitz && (
+        {isError && (
           <>
-            <div className="w-12 h-12 rounded-full bg-bear/10 border border-bear/40 flex items-center justify-center text-2xl">⚠️</div>
+            <div className="w-12 h-12 rounded-full bg-bear/10 border border-bear/40 flex items-center justify-center text-2xl flex-shrink-0">
+              ⚠️
+            </div>
             <div className="text-center">
               <div className="font-display text-[22px] tracking-[3px] text-bear mb-2">FETCH FAILED</div>
-              <div className="font-mono text-[10px] text-ts text-center leading-relaxed">{error}</div>
+              <div className="font-mono text-[10px] text-ts text-center leading-relaxed max-w-[260px]">
+                {error || 'Yahoo Finance could not be reached'}
+              </div>
             </div>
-            <div className="font-mono text-[9px] text-tm text-center">
-              Dashboard showing mock data.<br />Yahoo Finance may be temporarily unavailable.
+            <div className="font-mono text-[9px] text-tm text-center leading-relaxed">
+              Common causes: Netlify function not deployed,<br />
+              or Yahoo Finance temporarily unavailable.
             </div>
-            <button onClick={onDismiss}
-              className="px-5 py-2 font-mono text-[10px] font-semibold bg-warn text-bg rounded hover:bg-warn/80 transition-colors">
-              DISMISS — USE MOCK DATA
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="px-6 py-2 font-mono text-[10px] font-semibold bg-warn text-bg rounded hover:bg-warn/80 transition-colors cursor-pointer"
+            >
+              DISMISS
             </button>
           </>
         )}
-
       </div>
     </div>
   );

@@ -2,38 +2,28 @@ import React from 'react';
 import clsx from 'clsx';
 import { getAssetAlertLevel } from '../utils/alerts.js';
 
-// Static class maps — Tailwind can scan these
-const TOP_BAR = {
-  bull: 'before:bg-bull',
-  bear: 'before:bg-bear',
-  warn: 'before:bg-warn',
-  ts:   'before:bg-ts',
-};
-const CHG_COLOR = { bull: 'text-bull', bear: 'text-bear', warn: 'text-warn', ts: 'text-ts' };
+const TOP_BAR = { bull:'before:bg-bull', bear:'before:bg-bear', warn:'before:bg-warn', ts:'before:bg-ts' };
+const CHG_CLR = { bull:'text-bull', bear:'text-bear', warn:'text-warn', ts:'text-ts' };
 
 function fmtPrice(key, price) {
   if (price == null) return '—';
   if (key === 'usdZar') return price.toFixed(3);
-  if (key === 'sa10y')  return `${price.toFixed(2)}%`;
+  if (key === 'r2035')  return `${price.toFixed(3)}%`;
   if (key === 'brent')  return price.toFixed(2);
-  if (price >= 10000)   return price.toLocaleString('en-ZA', { maximumFractionDigits: 0 });
+  if (price >= 10000)   return price.toLocaleString('en-ZA', { maximumFractionDigits:0 });
   return price.toFixed(2);
 }
 
 function KpiCard({ assetKey, asset }) {
-  const { name, price, changePct, unit, icon, isLive } = asset;
-
-  const invert  = assetKey === 'usdZar' || assetKey === 'sa10y';
-  const isUp    = (changePct ?? 0) >= 0;
-  const good    = invert ? !isUp : isUp;          // "good for JSE"
-  const barKey  = price == null ? 'ts' : good ? 'bull' : 'bear';
-  const chgKey  = price == null ? 'ts' : good ? 'bull' : 'bear';
-  const alert   = getAssetAlertLevel(assetKey, changePct ?? 0);
-
-  const sign    = isUp ? '+' : '';
-  const chgStr  = changePct == null ? '—'
-    : assetKey === 'sa10y' ? `${sign}${changePct.toFixed(2)}bps`
-    : `${sign}${changePct.toFixed(2)}%`;
+  const { name, price, changePct, unit, icon, isLive, isProxy, source } = asset;
+  const invert   = asset.invert ?? false;
+  const isUp     = (changePct ?? 0) >= 0;
+  const good     = invert ? !isUp : isUp;
+  const barKey   = price == null ? 'ts' : good ? 'bull' : 'bear';
+  const chgKey   = price == null ? 'ts' : good ? 'bull' : 'bear';
+  const alert    = getAssetAlertLevel(assetKey, changePct ?? 0);
+  const sign     = isUp ? '+' : '';
+  const chgStr   = changePct == null ? '—' : `${sign}${changePct.toFixed(2)}%`;
 
   return (
     <div className={clsx(
@@ -49,17 +39,18 @@ function KpiCard({ assetKey, asset }) {
       <div className="font-mono text-[8px] tracking-[2px] text-ts mb-1.5">{icon} {name}</div>
       <div className="font-display text-[26px] leading-none tracking-[0.5px] text-tp">{fmtPrice(assetKey, price)}</div>
       <div className="flex items-baseline gap-1.5 mt-1.5">
-        <span className={clsx('font-mono text-[11px] font-semibold', CHG_COLOR[chgKey])}>{chgStr}</span>
+        <span className={clsx('font-mono text-[11px] font-semibold', CHG_CLR[chgKey])}>{chgStr}</span>
         <span className="font-mono text-[9px] text-tm">{unit}</span>
-        {isLive && <span className="font-mono text-[7px] text-bull ml-auto">● LIVE</span>}
+        {isLive && !isProxy && <span className="font-mono text-[7px] text-bull ml-auto">● {source ?? 'LIVE'}</span>}
+        {isProxy && <span className="font-mono text-[7px] text-warn ml-auto">● PROXY</span>}
       </div>
     </div>
   );
 }
 
 export default function KpiGrid({ assets, cis, hasData }) {
-  const keys = ['brent','usdZar','gold','platinum','palladium','coal','sa10y'];
-
+  // R2035 replaces sa10y; order matches dashboard layout
+  const keys = ['brent','usdZar','gold','platinum','palladium','coal','r2035'];
   const cisColor = !hasData ? 'text-ts'
     : cis.regimeClass === 'bull' ? 'text-bull'
     : cis.regimeClass === 'warn' ? 'text-warn'

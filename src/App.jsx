@@ -5,35 +5,45 @@ import { computeAlerts } from './utils/alerts.js';
 import { exportWatchlistCSV, exportMacroCSV, exportSnapshotJSON } from './utils/export.js';
 import { useMarketData }  from './hooks/useMarketData.js';
 import { useAutoRefresh } from './hooks/useAutoRefresh.js';
-import Sidebar           from './components/Sidebar.jsx';
-import TopBar            from './components/TopBar.jsx';
-import LoadingOverlay    from './components/LoadingOverlay.jsx';
-import Overview          from './pages/Overview.jsx';
-import MacroTransmission from './pages/MacroTransmission.jsx';
-import SectorDrilldown   from './pages/SectorDrilldown.jsx';
+import { useCISHistory }  from './hooks/useCISHistory.js';
+import { useToast }       from './hooks/useToast.js';
+import Sidebar            from './components/Sidebar.jsx';
+import TopBar             from './components/TopBar.jsx';
+import LoadingOverlay     from './components/LoadingOverlay.jsx';
+import Toast              from './components/Toast.jsx';
+import Overview           from './pages/Overview.jsx';
+import MacroTransmission  from './pages/MacroTransmission.jsx';
+import SectorDrilldown    from './pages/SectorDrilldown.jsx';
 
 function deriveSectors(stocks) {
-  const sectors  = {};
-  const top40Chg = stocks.length > 0 && stocks.some(s => s.isLive)
-    ? stocks.filter(s => s.changePct != null).reduce((a, s) => a + s.changePct, 0) / stocks.filter(s => s.changePct != null).length
-    : null;
+  const live = stocks.filter(s => s.isLive && s.changePct != null);
+  const sectors = {};
 
   for (const sector of SECTOR_ORDER) {
-    const ss  = stocks.filter(s => s.sector === sector && s.changePct != null);
+    const ss = live.filter(s => s.sector === sector);
     if (!ss.length) continue;
     const avg = ss.reduce((a, s) => a + s.changePct, 0) / ss.length;
-    sectors[sector] = { name: sector, chg: +avg.toFixed(2), rel: top40Chg != null ? +(avg - top40Chg).toFixed(2) : null };
+    sectors[sector] = { name: sector, chg: +avg.toFixed(2), rel: null };
   }
-  sectors.top40 = { name: 'JSE Top 40', chg: top40Chg != null ? +top40Chg.toFixed(2) : null, rel: 0 };
+
+  if (live.length > 0) {
+    const mktAvg = live.reduce((a, s) => a + s.changePct, 0) / live.length;
+    sectors.top40 = { name: 'JSE Market Avg', chg: +mktAvg.toFixed(2), rel: 0 };
+    for (const key of Object.keys(sectors)) {
+      if (key !== 'top40') sectors[key].rel = +(sectors[key].chg - mktAvg).toFixed(2);
+    }
+  } else {
+    sectors.top40 = { name: 'JSE Market Avg', chg: null, rel: 0 };
+  }
   return sectors;
 }
 
 const EMPTY_CIS = {
   total: 0, regime: 'NO DATA', regimeClass: 'neutral',
   components: {
-    macro: { score: 0, weight: 0.40, contrib: 0 },
-    jse:   { score: 0, weight: 0.35, contrib: 0 },
-    conf:  { score: 0, weight: 0.25, contrib: 0 },
+    macro: { score:0, weight:0.40, contrib:0 },
+    jse:   { score:0, weight:0.35, contrib:0 },
+    conf:  { score:0, weight:0.25, contrib:0 },
   },
 };
 
@@ -43,18 +53,25 @@ export default function App() {
   const [returnMode, setReturnMode] = useState('ABS');
 
   const { assets, stocks, status, error, lastFetch, progress, fetchLive, initFromCache, env } = useMarketData();
+  const { chartData: cisChartData, addReading, clearHistory } = useCISHistory();
+  const { toasts, addToast, removeToast } = useToast();
 
-  useEffect(() => { initFromCache(); }, []);
+  // On mount: show cached data immediately, then silently refresh if stale
+  useEffect(() => {
+    const isStale = initFromCache();
+    if (isStale) {
+      setTimeout(() => fetchLive(true), 800); // tiny delay so UI paints first
+    }
+  }, []);
 
-  const autoRefresh = useAutoRefresh(fetchLive);
-  const sectors     = useMemo(() => deriveSectors(stocks), [stocks]);
-  const hasData     = status === 'live' || status === 'cached';
+  const sectors = useMemo(() => deriveSectors(stocks), [stocks]);
+  const hasData = status === 'live' || status === 'cached';
 
   const cisInput = useMemo(() => ({
     brentChg:       assets.brent?.changePct     ?? 0,
     usdZarChg:      assets.usdZar?.changePct    ?? 0,
     goldChg:        assets.gold?.changePct      ?? 0,
-    sa10yChg:       assets.sa10y?.changePct     ?? 0,
+    r2035Chg:       assets.r2035?.changePct     ?? 0,
     top40Chg:       sectors.top40?.chg          ?? 0,
     minersChg:      sectors['Gold Miners']?.chg ?? 0,
     energyChg:      sectors.Energy?.chg         ?? 0,
@@ -66,24 +83,55 @@ export default function App() {
   const cis    = useMemo(() => hasData ? computeCIS(cisInput) : EMPTY_CIS, [hasData, cisInput]);
   const alerts = useMemo(() => hasData ? computeAlerts({ assets, sectors, stocks }) : [], [hasData, assets, sectors, stocks]);
 
+  // Record CIS history whenever a live fetch completes
+  const prevStatus = React.useRef(status);
+  useEffect(() => {
+    const wasLoading = prevStatus.current === 'loading';
+    prevStatus.current = status;
+    if (status === 'live' && wasLoading && hasData) {
+      addReading(cis.total, cis.regime, cis.regimeClass);
+    }
+  }, [status, hasData, cis, addReading]);
+
+  // Wrap fetchLive to add toast notification
+  const handleFetch = useCallback(async (silent = false) => {
+    const result = await fetchLive(silent);
+    if (result?.success) {
+      const r2035src = result.assets?.r2035?.source ?? '';
+      const bondLabel = r2035src === 'SARB' ? '● SARB R2035' : r2035src === 'FRED' ? '● FRED proxy' : '';
+      addToast(`↻ Data updated · ${new Date().toLocaleTimeString('en-ZA',{hour:'2-digit',minute:'2-digit'})} SAST ${bondLabel}`, 'success');
+    } else if (result?.error && !silent) {
+      addToast(`✕ Fetch failed: ${result.error}`, 'error', 5000);
+    }
+  }, [fetchLive, addToast]);
+
+  const autoRefresh = useAutoRefresh(handleFetch);
+
   const handleExport = useCallback((key) => {
     if (key === 'watchlist-csv') exportWatchlistCSV(stocks, timeframe);
     if (key === 'macro-csv')     exportMacroCSV(assets);
     if (key === 'snapshot-json') exportSnapshotJSON(assets, stocks, sectors, cis, alerts);
-  }, [stocks, assets, sectors, cis, alerts, timeframe]);
+    addToast('↓ File downloaded', 'info', 2000);
+  }, [stocks, assets, sectors, cis, alerts, timeframe, addToast]);
 
-  const shared = { assets, stocks, sectors, cis, alerts, timeframe, returnMode, status, hasData, onFetch: fetchLive };
+  const shared = {
+    assets, stocks, sectors, cis, alerts,
+    timeframe, returnMode, status, hasData,
+    onFetch: handleFetch,
+    cisChartData, clearHistory,
+  };
 
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-tp font-sans">
+      <Toast toasts={toasts} onRemove={removeToast} />
       <LoadingOverlay status={status} progress={progress} error={error} env={env} onDismiss={() => {}} />
       <Sidebar page={page} setPage={setPage} cis={cis} status={status} lastFetch={lastFetch} />
 
       <div className="flex flex-col flex-1 overflow-hidden" style={{ marginLeft: 220 }}>
         <TopBar
           page={page} status={status} error={error} lastFetch={lastFetch} progress={progress}
-          onFetch={fetchLive}
-          timeframe={timeframe}  setTimeframe={setTimeframe}
+          onFetch={handleFetch}
+          timeframe={timeframe}   setTimeframe={setTimeframe}
           returnMode={returnMode} setReturnMode={setReturnMode}
           autoRefresh={autoRefresh}
           onExport={handleExport}
