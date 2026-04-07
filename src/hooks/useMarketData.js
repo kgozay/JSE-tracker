@@ -11,7 +11,7 @@ function getEnv() {
   const h = window.location.hostname;
   if (h.includes('stackblitz') || h.includes('webcontainer')) return 'stackblitz';
   if (h === 'localhost' || h === '127.0.0.1') return 'local';
-  return 'netlify';
+  return 'vercel';
 }
 
 /* ─── empty baselines (no fake prices) ───────────────────────────── */
@@ -131,7 +131,7 @@ export function useMarketData() {
     const environment = envRef.current ?? getEnv();
 
     if (environment === 'stackblitz') {
-      setError('Live data requires Netlify deployment. Running on Stackblitz — functions are unavailable here.');
+      setError('Live data requires Vercel deployment. Running on Stackblitz — functions are unavailable here.');
       setStatus('error');
       return { success: false };
     }
@@ -155,11 +155,11 @@ export function useMarketData() {
       let sarbResult;
       try {
         const [rYahoo, rSarb] = await Promise.allSettled([
-          fetch(`/.netlify/functions/quotes?symbols=${encodeURIComponent(symbolStr)}`, fetchOpts).then(async r => {
+          fetch(`/api/quotes?symbols=${encodeURIComponent(symbolStr)}`, fetchOpts).then(async r => {
             if (!r.ok) throw new Error(`Yahoo HTTP ${r.status}`);
             return r.json();
           }),
-          fetch(`/.netlify/functions/sarb`, fetchOpts).then(async r => {
+          fetch(`/api/sarb`, fetchOpts).then(async r => {
             if (!r.ok) throw new Error(`SARB HTTP ${r.status}`);
             return r.json();
           })
@@ -199,7 +199,7 @@ export function useMarketData() {
         throw new Error(
           yahooResult.reason?.message
           ?? yahooResult.value?.error
-          ?? 'Yahoo Finance fetch failed — check Netlify function logs'
+          ?? 'Yahoo Finance fetch failed — check Vercel function logs'
         );
       }
 

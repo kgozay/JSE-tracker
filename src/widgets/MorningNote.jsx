@@ -23,7 +23,7 @@ export default function MorningNote({ assets, sectors, cis, stocks, hasData }) {
     setMeta(null);
 
     try {
-      const res = await fetch('/.netlify/functions/morning-note', {
+      const res = await fetch('/api/morning-note', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ assets, sectors, cis, stocks }),
@@ -148,7 +148,7 @@ export default function MorningNote({ assets, sectors, cis, stocks, hasData }) {
           <p className="font-mono text-[9px] text-ts leading-relaxed">{error}</p>
           {error.includes('GEMINI_API_KEY') && (
             <p className="font-mono text-[8px] text-tm leading-relaxed">
-              → Get free key at aistudio.google.com/app/apikey → Netlify → Site settings → Environment variables → Key: <span className="text-warn">GEMINI_API_KEY</span>
+              → Get free key at aistudio.google.com/app/apikey → Vercel → Project Settings → Environment Variables → Key: <span className="text-warn">GEMINI_API_KEY</span>
             </p>
           )}
           <button
